@@ -17,7 +17,7 @@ and video data.
 - [websocket-bridge](https://github.com/fermyon/websocket-bridge)
 - Redis server (or use a free [redislabs.com](https://redislabs.com) account)
 - A TLS cert your browser will accept (e.g. one from [letsencrypt.org](https://letsencrypt.org))
- - You may need two of these if you run `websocket-bridge` and `spin` on separate servers
+    - You may need two of these if you run `websocket-bridge` and `spin` on separate servers
 
 First, start `websocket_bridge`, configuring it to allow traffic to the Spin
 server we'll run in the next step.  Note that the `--whitelist` option takes a
