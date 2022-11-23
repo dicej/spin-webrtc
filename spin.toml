@@ -1,0 +1,16 @@
+spin_version = "1"
+authors = ["Fermyon Engineering <engineering@fermyon.com>"]
+description = "A minimal WebRTC app for Spin"
+name = "spin-webrtc"
+trigger = { type = "http", base = "/" }
+version = "0.1.0"
+
+[[component]]
+id = "spin-webrtc"
+source = "target/wasm32-wasi/release/spin_webrtc.wasm"
+allowed_http_hosts = ["insecure:allow-all"]
+files = [{ source = "static/", destination = "/" }]
+[component.trigger]
+route = "/..."
+[component.build]
+command = "cargo build --target wasm32-wasi --release"
