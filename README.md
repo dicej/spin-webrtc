@@ -22,7 +22,7 @@ and video data.
 First, start `websocket_bridge`, configuring it to allow traffic to the Spin
 server we'll run in the next step.  Note that the `--whitelist` option takes a
 regular expression (and can be specified multiple times), so be sure to escape
-any dots in the name (e.g. "foo.example.com" -> "foo\.example\.com").
+any dots in the name (e.g. `foo.example.com` -> `foo\.example\.com`).
 
 ```
 RUST_LOG=info websocket_bridge \
