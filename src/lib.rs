@@ -122,14 +122,13 @@ fn handle(req: Request) -> Result<Response> {
 
     Ok(match (req.method(), req.uri().path()) {
         (&Method::POST, "/frame") => {
-            let send_url = send_url()?.to_owned();
-
             let Inbound::Room { name } = serde_json::from_slice(
-                &req.into_body()
+                req.body()
+                    .as_deref()
                     .ok_or_else(|| anyhow!("expected non-empty body"))?,
             )?;
 
-            add(&send_url, &name)?;
+            add(send_url()?, &name)?;
 
             response().body(None)?
         }
