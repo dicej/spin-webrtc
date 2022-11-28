@@ -9,7 +9,6 @@ use {
         http_component, outbound_http, redis,
     },
     std::{env, fs::File, io::Read, str},
-    url::Url,
 };
 
 const REDIS_URL: &str = env!("REDIS_URL");
@@ -28,19 +27,12 @@ enum Inbound {
     Room { name: String },
 }
 
-fn get_header_url(headers: &HeaderMap, name: &str) -> Result<Url> {
-    let missing_error = || anyhow!(r#"missing required header: "{name}""#);
-
-    let parse_error = || anyhow!(r#"unable to parse "{name}" header as a URL"#);
-
-    Url::parse(
-        headers
-            .get(name)
-            .ok_or_else(missing_error)?
-            .to_str()
-            .with_context(parse_error)?,
-    )
-    .with_context(parse_error)
+fn get_header_url<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str> {
+    headers
+        .get(name)
+        .with_context(|| anyhow!(r#"missing required header: "{name}""#))?
+        .to_str()
+        .with_context(|| anyhow!(r#"unable to parse "{name}" header as UTF-8"#))
 }
 
 fn add(url: &str, room: &str) -> Result<()> {
@@ -130,20 +122,20 @@ fn handle(req: Request) -> Result<Response> {
 
     Ok(match (req.method(), req.uri().path()) {
         (&Method::POST, "/frame") => {
-            let send_url = send_url()?;
+            let send_url = send_url()?.to_owned();
 
             let Inbound::Room { name } = serde_json::from_slice(
                 &req.into_body()
                     .ok_or_else(|| anyhow!("expected non-empty body"))?,
             )?;
 
-            add(send_url.as_ref(), &name)?;
+            add(&send_url, &name)?;
 
             response().body(None)?
         }
 
         (&Method::POST, "/disconnect") => {
-            remove(send_url()?.as_ref())?;
+            remove(send_url()?)?;
 
             response().body(None)?
         }
