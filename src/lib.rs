@@ -1,8 +1,7 @@
 #![deny(warnings)]
 use {
     anyhow::{anyhow, Context, Error, Result},
-    http::response::Builder,
-    http::{HeaderMap, Method, StatusCode},
+    http::{response::Builder, HeaderMap, Method, StatusCode},
     serde::{Deserialize, Serialize},
     spin_sdk::{
         http::{Request, Response},
