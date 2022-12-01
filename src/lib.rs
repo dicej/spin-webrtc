@@ -7,7 +7,7 @@ use {
         http::{Request, Response},
         http_component, outbound_http, redis,
     },
-    std::{env, fs::File, io::Read, str},
+    std::{env, fs, str},
 };
 
 const REDIS_URL: &str = env!("REDIS_URL");
@@ -97,14 +97,6 @@ fn send_to_all(url: &str, room: &str, outbound: &Outbound) -> Result<()> {
     Ok(())
 }
 
-fn read_to_end(path: &str) -> Result<Vec<u8>> {
-    let mut vec = Vec::new();
-
-    File::open(path)?.read_to_end(&mut vec)?;
-
-    Ok(vec)
-}
-
 fn redis_error(_error: redis::Error) -> Error {
     anyhow!("redis error")
 }
@@ -140,15 +132,15 @@ fn handle(req: Request) -> Result<Response> {
 
         (&Method::GET, "/index.js") => response()
             .header("content-type", "text/javascript;charset=UTF-8")
-            .body(Some(read_to_end("index.js")?.into()))?,
+            .body(Some(fs::read("index.js")?.into()))?,
 
         (&Method::GET, "/index.css") => response()
             .header("content-type", "text/css;charset=UTF-8")
-            .body(Some(read_to_end("index.css")?.into()))?,
+            .body(Some(fs::read("index.css")?.into()))?,
 
         (&Method::GET, _) => response()
             .header("content-type", "text/html;charset=UTF-8")
-            .body(Some(read_to_end("index.html")?.into()))?,
+            .body(Some(fs::read("index.html")?.into()))?,
 
         _ => response().status(StatusCode::BAD_REQUEST).body(None)?,
     })
