@@ -9,7 +9,7 @@ version = "0.1.0"
 id = "spin-webrtc"
 source = "target/wasm32-wasi/release/spin_webrtc.wasm"
 allowed_http_hosts = ["insecure:allow-all"]
-files = [{ source = "static/", destination = "/" }]
+files = [{ source = "client/dist/", destination = "/" }]
 [component.trigger]
 route = "/..."
 [component.build]

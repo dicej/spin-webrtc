@@ -2,29 +2,15 @@
 use {
     anyhow::{anyhow, Context, Error, Result},
     http::{response::Builder, HeaderMap, Method, StatusCode},
-    serde::{Deserialize, Serialize},
     spin_sdk::{
         http::{Request, Response},
         http_component, outbound_http, redis,
     },
+    spin_webrtc_protocol::{ClientMessage, ServerMessage},
     std::{env, fs, str},
 };
 
 const REDIS_URL: &str = env!("REDIS_URL");
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum Outbound<'a> {
-    You { url: &'a str },
-    Add { url: &'a str },
-    Remove { url: &'a str },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum Inbound {
-    Room { name: String },
-}
 
 fn get_header_url<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str> {
     headers
@@ -40,13 +26,13 @@ fn add(url: &str, room: &str) -> Result<()> {
     // TODO: check if specified URL is already in a room and either remove it or error out
 
     if !room.is_empty() {
-        send_to(url, &Outbound::You { url })?;
+        send_to(url, &ClientMessage::You { url })?;
 
         redis::sadd(REDIS_URL, &format!("room:{room}"), &[url]).map_err(redis_error)?;
 
         redis::set(REDIS_URL, &format!("url:{url}"), room.as_bytes()).map_err(redis_error)?;
 
-        send_to_all(url, room, &Outbound::Add { url })?;
+        send_to_all(url, room, &ClientMessage::Add { url })?;
     }
 
     Ok(())
@@ -63,13 +49,13 @@ fn remove(url: &str) -> Result<()> {
 
         redis::srem(REDIS_URL, &format!("room:{room}"), &[url]).map_err(redis_error)?;
 
-        send_to_all(url, room, &Outbound::Remove { url })?;
+        send_to_all(url, room, &ClientMessage::Remove { url })?;
     }
 
     Ok(())
 }
 
-fn send_to(url: &str, outbound: &Outbound) -> Result<()> {
+fn send_to(url: &str, outbound: &ClientMessage) -> Result<()> {
     println!("send to {url}: {outbound:?}\n");
 
     let response = outbound_http::send_request(
@@ -87,7 +73,7 @@ fn send_to(url: &str, outbound: &Outbound) -> Result<()> {
     Ok(())
 }
 
-fn send_to_all(url: &str, room: &str, outbound: &Outbound) -> Result<()> {
+fn send_to_all(url: &str, room: &str, outbound: &ClientMessage) -> Result<()> {
     for member in redis::smembers(REDIS_URL, &format!("room:{room}")).map_err(redis_error)? {
         if member != url {
             send_to(&member, outbound)?;
@@ -105,6 +91,24 @@ fn response() -> Builder {
     http::Response::builder()
 }
 
+fn content_type(path: &str) -> &'static str {
+    // todo: use a library for this
+
+    let default = "application/octet-stream";
+
+    if let Some(index) = path.rfind('.') {
+        match &path[(index + 1)..] {
+            "html" => "text/html;charset=UTF-8",
+            "css" => "text/css;charset=UTF-8",
+            "js" => "text/javascript;charset=UTF-8",
+            "wasm" => "application/wasm",
+            _ => default,
+        }
+    } else {
+        default
+    }
+}
+
 #[http_component]
 fn handle(req: Request) -> Result<Response> {
     let send_url = || get_header_url(req.headers(), "x-ws-proxy-send");
@@ -113,13 +117,13 @@ fn handle(req: Request) -> Result<Response> {
 
     Ok(match (req.method(), req.uri().path()) {
         (&Method::POST, "/frame") => {
-            let Inbound::Room { name } = serde_json::from_slice(
+            let ServerMessage::Room { name } = serde_json::from_slice(
                 req.body()
                     .as_deref()
                     .ok_or_else(|| anyhow!("expected non-empty body"))?,
             )?;
 
-            add(send_url()?, &name)?;
+            add(send_url()?, name)?;
 
             response().body(None)?
         }
@@ -130,17 +134,17 @@ fn handle(req: Request) -> Result<Response> {
             response().body(None)?
         }
 
-        (&Method::GET, "/index.js") => response()
-            .header("content-type", "text/javascript;charset=UTF-8")
-            .body(Some(fs::read("index.js")?.into()))?,
-
-        (&Method::GET, "/index.css") => response()
-            .header("content-type", "text/css;charset=UTF-8")
-            .body(Some(fs::read("index.css")?.into()))?,
-
-        (&Method::GET, _) => response()
-            .header("content-type", "text/html;charset=UTF-8")
-            .body(Some(fs::read("index.html")?.into()))?,
+        (&Method::GET, path) => {
+            if let Ok(body) = fs::read(path) {
+                response()
+                    .header("content-type", content_type(path))
+                    .body(Some(body.into()))
+            } else {
+                response()
+                    .header("content-type", content_type("index.html"))
+                    .body(Some(fs::read("index.html")?.into()))
+            }?
+        }
 
         _ => response().status(StatusCode::BAD_REQUEST).body(None)?,
     })
