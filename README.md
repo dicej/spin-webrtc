@@ -12,11 +12,11 @@ and video data.
 
 ### Prerequisites
 
-- Rust
+- [Rust](https://rustup.rs/)
 - [Trunk](https://trunkrs.dev/#getting-started)
-- Spin (recent enough to include [this PR](https://github.com/fermyon/spin/pull/915))
+- [Spin](https://github.com/fermyon/spin) (recent enough to include [this PR](https://github.com/fermyon/spin/pull/915))
 - [websocket-bridge](https://github.com/fermyon/websocket-bridge)
-- Redis server (or use a free [redislabs.com](https://redislabs.com) account)
+- [Redis](https://redis.io/) server (or use a free [redislabs.com](https://redislabs.com) account)
 - A TLS cert your browser will accept (e.g. one from [letsencrypt.org](https://letsencrypt.org))
     - You may need two of these if you run `websocket-bridge` and `spin` on separate servers
 
