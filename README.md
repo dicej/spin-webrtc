@@ -13,6 +13,7 @@ and video data.
 ### Prerequisites
 
 - Rust
+- [Trunk](https://trunkrs.dev/#getting-started)
 - Spin (recent enough to include [this PR](https://github.com/fermyon/spin/pull/915))
 - [websocket-bridge](https://github.com/fermyon/websocket-bridge)
 - Redis server (or use a free [redislabs.com](https://redislabs.com) account)
@@ -34,14 +35,11 @@ RUST_LOG=info websocket_bridge \
 ```
 
 Next, build and run this app using Spin, specifying the URL of your Redis
-server, and also editing static/index.js to point to your `websocket-bridge`
-server (TODO: provide a more elegant way to configure this, e.g. via a Cargo
-build script).
+server and the hostname of your `websocket-bridge` server.
 
 ```
-sed -i 's/\[insert your websocket-bridge server here\]/'$YOUR_WEBSOCKET_BRIDGE_SERVER':9443/' \
-    static/index.js
 export REDIS_URL=redis://$YOUR_REDIS_SERVER
+export WEBSOCKET_BRIDGE_HOST=$YOUR_WEBSOCKET_BRIDGE_SERVER:9443
 spin build
 spin up \
     --follow-all \

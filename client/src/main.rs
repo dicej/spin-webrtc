@@ -1,14 +1,15 @@
 #![deny(warnings)]
 
 use {
-    futures::{FutureExt, SinkExt, StreamExt, TryFutureExt},
+    futures::{FutureExt, SinkExt, StreamExt},
     js_sys::{Array, Reflect},
     leptos::{
         self, create_component, leptos_dom,
         web_sys::{
-            self, Element, HtmlVideoElement, MediaStream, MediaStreamConstraints, MediaStreamTrack,
-            RtcConfiguration, RtcIceCandidateInit, RtcIceServer, RtcPeerConnection,
-            RtcPeerConnectionIceEvent, RtcSdpType, RtcSessionDescriptionInit, RtcTrackEvent,
+            self, Element, HtmlTextAreaElement, HtmlVideoElement, KeyboardEvent, MediaStream,
+            MediaStreamConstraints, MediaStreamTrack, RtcConfiguration, RtcIceCandidateInit,
+            RtcIceServer, RtcPeerConnection, RtcPeerConnectionIceEvent, RtcSdpType,
+            RtcSessionDescriptionInit, RtcTrackEvent,
         },
         For, ForProps, IntoChild, Prop, ReadSignal, RwSignal, Scope, WriteSignal,
     },
@@ -44,6 +45,9 @@ pub enum MyError {
     #[error("redundant ClientMessage::You")]
     RedundantYou,
 
+    #[error("missed ClientMessage::You")]
+    MissingYou,
+
     #[error("unexpected message")]
     UnexpectedMessage(Message),
 
@@ -63,6 +67,37 @@ impl From<WebSocketError> for MyError {
     }
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum ChatSource {
+    Me,
+    SomeoneElse,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct ChatMessage {
+    source: ChatSource,
+    message: String,
+}
+
+#[derive(Default, Clone)]
+struct ChatLog {
+    next_id: u64,
+    log: Vec<(u64, ChatMessage)>,
+}
+
+impl ChatLog {
+    fn add(&mut self, message: ChatMessage) {
+        self.log.push((self.next_id, message));
+        self.next_id += 1;
+    }
+}
+
+struct Connection {
+    id: u64,
+    connection: RtcPeerConnection,
+    stream: Option<RwSignal<MediaStream>>,
+}
+
 fn main() {
     console_error_panic_hook::set_once();
 
@@ -71,13 +106,51 @@ fn main() {
     leptos::mount_to_body(videos);
 }
 
-pub fn videos(cx: Scope) -> Element {
+async fn send_to_peer(
+    me: &OnceCell<Box<str>>,
+    url: &str,
+    message: PeerMessage<'_>,
+) -> Result<(), MyError> {
+    Request::post(url)
+        .body(
+            serde_json::to_string(&ClientMessage::Peer {
+                url: me.get().ok_or(MyError::MissingYou)?,
+                message,
+            })
+            .unwrap(),
+        )
+        .send()
+        .await
+        .map_err(MyError::from)
+        .map(drop)
+}
+
+fn videos(cx: Scope) -> Element {
     let (local_video, set_local_video) = leptos::create_signal(cx, None);
     let (remote_videos, set_remote_videos) = leptos::create_signal(cx, Vec::new());
+    let (chat_log, set_chat_log) = leptos::create_signal(cx, ChatLog::default());
 
-    wasm_bindgen_futures::spawn_local(async move {
-        if let Err(e) = connect(cx, set_local_video, set_remote_videos).await {
-            log::warn!("{e:?}");
+    let me = Rc::new(OnceCell::<Box<str>>::new());
+
+    let connections = Rc::new(RefCell::new(HashMap::<Rc<str>, Connection>::new()));
+
+    wasm_bindgen_futures::spawn_local({
+        let me = me.clone();
+        let connections = connections.clone();
+
+        async move {
+            if let Err(e) = connect(
+                cx,
+                me,
+                connections,
+                set_local_video,
+                set_remote_videos,
+                set_chat_log,
+            )
+            .await
+            {
+                log::error!("fatal error: {e:?}");
+            }
         }
     });
 
@@ -113,28 +186,77 @@ pub fn videos(cx: Scope) -> Element {
         }
     });
 
+    let on_key = move |event: KeyboardEvent| {
+        if event.key().deref() == "Enter" {
+            if let Some(target) = event
+                .target()
+                .and_then(|target| target.dyn_into::<HtmlTextAreaElement>().ok())
+            {
+                let message = target.value();
+                target.set_value("");
+                for url in connections.borrow().keys() {
+                    wasm_bindgen_futures::spawn_local({
+                        let me = me.clone();
+                        let url = url.clone();
+                        let message = message.clone();
+
+                        async move {
+                            if let Err(e) =
+                                send_to_peer(&me, &url, PeerMessage::Chat { message }).await
+                            {
+                                log::warn!("error sending chat to {url}: {e:?}");
+                            }
+                        }
+                    });
+                }
+                set_chat_log.update(|log| {
+                    log.add(ChatMessage {
+                        source: ChatSource::Me,
+                        message,
+                    })
+                });
+            }
+        }
+    };
+
+    let chat_log_elements = move |cx, (_, message): &(_, ChatMessage)| {
+        let who = match message.source {
+            ChatSource::Me => "me: ",
+            ChatSource::SomeoneElse => "them: ",
+        };
+
+        leptos::view! { cx, <div><b>{who}</b> {message.message.clone()}</div> }
+    };
+
     leptos::view! { cx,
-        <div>
-            {Element::from(local_video_element)}
-            <div id="remoteVideos">
-                <For each=move || remote_videos.get() key=|(id, _)| *id>
-                    {remote_video_elements}
-                </For>
+        <div id="parent">
+            <div id="videos">
+                {Element::from(local_video_element)}
+                <div id="remoteVideos">
+                    <For each=move || remote_videos.get() key=|(id, _)| *id>
+                        {remote_video_elements}
+                    </For>
+                </div>
+            </div>
+            <div id="chat">
+                <div id="chatLog">
+                    <For each=move || chat_log.get().log key=|(id, _)| *id>
+                        {chat_log_elements}
+                    </For>
+                </div>
+                <textarea id="chatArea" name="chatArea" on:keyup=on_key/>
             </div>
         </div>
     }
 }
 
-struct Connection {
-    id: u64,
-    connection: RtcPeerConnection,
-    stream: Option<RwSignal<MediaStream>>,
-}
-
 async fn connect(
     cx: Scope,
+    me: Rc<OnceCell<Box<str>>>,
+    connections: Rc<RefCell<HashMap<Rc<str>, Connection>>>,
     local_video: WriteSignal<Option<MediaStream>>,
     remote_videos: WriteSignal<Vec<(u64, ReadSignal<MediaStream>)>>,
+    chat_log: WriteSignal<ChatLog>,
 ) -> Result<(), MyError> {
     let window = web_sys::window().unwrap();
     let location = window.location();
@@ -152,8 +274,6 @@ async fn connect(
         "wss://{}/connect?f={base}/frame&d={base}/disconnect",
         env!("WEBSOCKET_BRIDGE_HOST")
     );
-
-    let connections = Rc::new(RefCell::new(HashMap::<Rc<str>, Connection>::new()));
 
     let ice_server = |spec| {
         let mut server = RtcIceServer::new();
@@ -187,25 +307,6 @@ async fn connect(
 
     local_video.set(Some(local_stream.clone()));
 
-    let me = Rc::new(OnceCell::<Box<str>>::new());
-
-    let send_to_peer = {
-        let me = me.clone();
-
-        move |url: &str, message: PeerMessage<'_>| {
-            Request::post(url)
-                .body(
-                    serde_json::to_string(&ClientMessage::Peer {
-                        url: me.get().unwrap().as_ref(),
-                        message,
-                    })
-                    .unwrap(),
-                )
-                .send()
-                .map_err(MyError::from)
-        }
-    };
-
     let update_remote_videos = {
         let connections = connections.clone();
 
@@ -230,7 +331,7 @@ async fn connect(
     let mut add = {
         let connections = connections.clone();
         let update_remote_videos = update_remote_videos.clone();
-        let send_to_peer = send_to_peer.clone();
+        let me = me.clone();
         let mut next_id = 0;
 
         move |url: Rc<str>| {
@@ -286,15 +387,16 @@ async fn connect(
 
             let onicecandidate = Closure::wrap(Box::new({
                 let url = url.clone();
-                let send_to_peer = send_to_peer.clone();
+                let me = me.clone();
 
                 move |event: RtcPeerConnectionIceEvent| {
                     if let Some(candidate) = event.candidate() {
                         let url = url.clone();
-                        let send_to_peer = send_to_peer.clone();
+                        let me = me.clone();
 
                         wasm_bindgen_futures::spawn_local(async move {
                             send_to_peer(
+                                &me,
                                 &url,
                                 PeerMessage::Candidate {
                                     candidate: &candidate.candidate(),
@@ -373,7 +475,7 @@ async fn connect(
                             ))
                             .await?;
 
-                            send_to_peer(url, PeerMessage::Offer { sdp }).await
+                            send_to_peer(&me, url, PeerMessage::Offer { sdp }).await
                         }
                         .map(|result| {
                             if let Err(e) = result {
@@ -414,7 +516,7 @@ async fn connect(
                                 ))
                                 .await?;
 
-                                send_to_peer(url, PeerMessage::Answer { sdp }).await
+                                send_to_peer(&me, url, PeerMessage::Answer { sdp }).await
                             }
                             .map(|result| {
                                 if let Err(e) = result {
@@ -454,6 +556,15 @@ async fn connect(
                                 }
                             })
                             .await
+                        }
+
+                        PeerMessage::Chat { message } => {
+                            chat_log.update(|log| {
+                                log.add(ChatMessage {
+                                    source: ChatSource::SomeoneElse,
+                                    message,
+                                })
+                            });
                         }
                     }
                 }

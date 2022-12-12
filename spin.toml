@@ -13,4 +13,4 @@ files = [{ source = "client/dist/", destination = "/" }]
 [component.trigger]
 route = "/..."
 [component.build]
-command = "cargo build --target wasm32-wasi --release"
+command = "(cd client && trunk build --release) && cargo build --target wasm32-wasi --release"

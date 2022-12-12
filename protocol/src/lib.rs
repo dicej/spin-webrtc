@@ -14,6 +14,9 @@ pub enum PeerMessage<'a> {
     Answer {
         sdp: String,
     },
+    Chat {
+        message: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]

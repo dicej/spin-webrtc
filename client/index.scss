@@ -1,5 +1,25 @@
-#localVideo
-{
+#parent {
+    display: flex;
+    flex-direction: row;
+}
+
+#videos {
+    width: 70%;
+}
+
+#chat {
+    width: 30%;
+}
+
+#chatLog {
+    height: 60%;
+}
+
+#chatArea {
+    height: 20%;
+}
+
+#localVideo {
     transform: rotateY(180deg);
     -webkit-transform:rotateY(180deg); /* Safari and Chrome */
     -moz-transform:rotateY(180deg); /* Firefox */
