@@ -111,7 +111,7 @@ fn content_type(path: &str) -> &'static str {
 
 #[http_component]
 fn handle(req: Request) -> Result<Response> {
-    let send_url = || get_header_url(req.headers(), "x-ws-proxy-send");
+    let send_url = || get_header_url(req.headers(), "ws-bridge-send");
 
     println!("got request: {req:?}\n");
 
