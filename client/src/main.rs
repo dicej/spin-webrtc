@@ -11,7 +11,7 @@ use {
             RtcIceServer, RtcPeerConnection, RtcPeerConnectionIceEvent, RtcSdpType,
             RtcSessionDescriptionInit, RtcTrackEvent,
         },
-        For, ForProps, IntoChild, Prop, ReadSignal, RwSignal, Scope, WriteSignal,
+        For, ForProps, IntoChild, NodeRef, Prop, ReadSignal, RwSignal, Scope, WriteSignal,
     },
     once_cell::unsync::OnceCell,
     reqwasm::{
@@ -79,8 +79,9 @@ struct ChatMessage {
     message: String,
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 struct ChatLog {
+    element: NodeRef,
     next_id: u64,
     log: Vec<(u64, ChatMessage)>,
 }
@@ -89,6 +90,15 @@ impl ChatLog {
     fn add(&mut self, message: ChatMessage) {
         self.log.push((self.next_id, message));
         self.next_id += 1;
+        wasm_bindgen_futures::spawn_local({
+            let element = self.element;
+
+            async move {
+                if let Some(element) = element.get() {
+                    element.set_scroll_top(element.scroll_height());
+                }
+            }
+        });
     }
 }
 
@@ -112,13 +122,10 @@ async fn send_to_peer(
     message: PeerMessage<'_>,
 ) -> Result<(), MyError> {
     Request::post(url)
-        .body(
-            serde_json::to_string(&ClientMessage::Peer {
-                url: me.get().ok_or(MyError::MissingYou)?,
-                message,
-            })
-            .unwrap(),
-        )
+        .body(serde_json::to_string(&ClientMessage::Peer {
+            url: me.get().ok_or(MyError::MissingYou)?,
+            message,
+        })?)
         .send()
         .await
         .map_err(MyError::from)
@@ -126,9 +133,18 @@ async fn send_to_peer(
 }
 
 fn videos(cx: Scope) -> Element {
+    let chat_log_element = NodeRef::new(cx);
+
     let (local_video, set_local_video) = leptos::create_signal(cx, None);
     let (remote_videos, set_remote_videos) = leptos::create_signal(cx, Vec::new());
-    let (chat_log, set_chat_log) = leptos::create_signal(cx, ChatLog::default());
+    let (chat_log, set_chat_log) = leptos::create_signal(
+        cx,
+        ChatLog {
+            element: chat_log_element,
+            next_id: 0,
+            log: Vec::new(),
+        },
+    );
 
     let me = Rc::new(OnceCell::<Box<str>>::new());
 
@@ -232,14 +248,12 @@ fn videos(cx: Scope) -> Element {
         <div id="parent">
             <div id="videos">
                 {Element::from(local_video_element)}
-                <div id="remoteVideos">
-                    <For each=move || remote_videos.get() key=|(id, _)| *id>
-                        {remote_video_elements}
-                    </For>
-                </div>
+                <For each=move || remote_videos.get() key=|(id, _)| *id>
+                    {remote_video_elements}
+                </For>
             </div>
             <div id="chat">
-                <div id="chatLog">
+                <div id="chatLog" _ref=chat_log_element>
                     <For each=move || chat_log.get().log key=|(id, _)| *id>
                         {chat_log_elements}
                     </For>
@@ -438,12 +452,11 @@ async fn connect(
 
     let (mut tx, mut rx) = WebSocket::open(&url)?.split();
 
-    tx.send(Message::Text(
-        serde_json::to_string(&ServerMessage::Room {
+    tx.send(Message::Text(serde_json::to_string(
+        &ServerMessage::Room {
             name: &window.location().pathname()?,
-        })
-        .unwrap(),
-    ))
+        },
+    )?))
     .await?;
 
     let get_sdp = |object: &JsValue| {

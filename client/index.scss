@@ -1,4 +1,5 @@
 #parent {
+    height: 100vh;
     display: flex;
     flex-direction: row;
 }
@@ -7,16 +8,24 @@
     width: 70%;
 }
 
+video {
+    display: inline-block;
+    width: 640px;
+    height: 480px;
+}
+
 #chat {
     width: 30%;
 }
 
 #chatLog {
     height: 60%;
+    overflow: scroll;
 }
 
 #chatArea {
     height: 20%;
+    width: 100%;
 }
 
 #localVideo {
