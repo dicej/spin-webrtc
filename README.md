@@ -4,9 +4,9 @@ This is a [Spin](https://github.com/fermyon/spin) app for doing
 browser-to-browser WebRTC video calls.  It uses
 [websocket-bridge](https://github.com/fermyon/websocket-bridge) and
 [Redis](https://redis.io) to establish indirect connections between peers, which
-the client-side JS code uses to exchange WebRTC signaling messages (e.g. SDP and
-ICE handshakes) and thereby establish direct connections for exchanging audio
-and video data.
+the client-side code uses to exchange WebRTC signaling messages (e.g. SDP and
+ICE handshakes) and thereby establish direct peer-to-peer connections for
+exchanging audio and video data.
 
 ## Building and Running
 
