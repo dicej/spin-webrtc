@@ -196,9 +196,8 @@ fn videos(cx: Scope) -> Element {
         let local_video_element = local_video_element.clone();
 
         move |_| {
-            local_video_element
-                .clone()
-                .set_src_object(local_video.get().as_ref());
+            local_video_element.set_src_object(local_video.get().as_ref());
+            local_video_element.set_muted(true);
         }
     });
 
@@ -241,7 +240,7 @@ fn videos(cx: Scope) -> Element {
             ChatSource::SomeoneElse => "them: ",
         };
 
-        leptos::view! { cx, <div><b>{who}</b> {message.message.clone()}</div> }
+        leptos::view! { cx, <div><b>{who}</b>{message.message.clone()}</div> }
     };
 
     leptos::view! { cx,
