@@ -90,6 +90,7 @@ impl ChatLog {
     fn add(&mut self, message: ChatMessage) {
         self.log.push((self.next_id, message));
         self.next_id += 1;
+
         wasm_bindgen_futures::spawn_local({
             let element = self.element;
 
@@ -263,6 +264,298 @@ fn videos(cx: Scope) -> Element {
     }
 }
 
+fn ice_server(spec: &str) -> RtcIceServer {
+    let mut server = RtcIceServer::new();
+    server.urls(&JsValue::from_str(spec));
+    server
+}
+
+fn rtc_config() -> RtcConfiguration {
+    let mut config = RtcConfiguration::new();
+    config.ice_servers(
+        [
+            ice_server("stun:stun.services.mozilla.com"),
+            ice_server("stun:stun.l.google.com:19302"),
+        ]
+        .into_iter()
+        .collect::<Array>()
+        .deref(),
+    );
+    config
+}
+
+fn make_remote_video_updater(
+    connections: Rc<RefCell<HashMap<Rc<str>, Connection>>>,
+    remote_videos: WriteSignal<Vec<(u64, ReadSignal<MediaStream>)>>,
+) -> impl Fn() + Clone {
+    move || {
+        let mut vec = connections
+            .borrow()
+            .values()
+            .filter_map(|connection| {
+                connection
+                    .stream
+                    .as_ref()
+                    .map(|stream| (connection.id, stream.read_only()))
+            })
+            .collect::<Vec<_>>();
+
+        vec.sort_by_key(|(id, _)| *id);
+
+        remote_videos.set(vec);
+    }
+}
+
+fn make_connection_adder(
+    cx: Scope,
+    connections: Rc<RefCell<HashMap<Rc<str>, Connection>>>,
+    me: Rc<OnceCell<Box<str>>>,
+    remote_videos: WriteSignal<Vec<(u64, ReadSignal<MediaStream>)>>,
+    local_stream: MediaStream,
+) -> impl FnMut(&str) -> Result<RtcPeerConnection, MyError> {
+    let update_remote_videos = make_remote_video_updater(connections.clone(), remote_videos);
+    let config = rtc_config();
+    let mut next_id = 0;
+
+    move |url| {
+        log::info!("adding peer {url}");
+
+        let url = Rc::<str>::from(url);
+
+        let connection = RtcPeerConnection::new_with_configuration(&config)?;
+
+        connections.borrow_mut().insert(
+            url.clone(),
+            Connection {
+                id: next_id,
+                connection: connection.clone(),
+                stream: None,
+            },
+        );
+
+        next_id += 1;
+
+        update_remote_videos();
+
+        let ontrack = Closure::wrap(Box::new({
+            let url = url.clone();
+            let update_remote_videos = update_remote_videos.clone();
+            let connections = connections.clone();
+
+            move |event: RtcTrackEvent| match event.streams().at(0).dyn_into::<MediaStream>() {
+                Ok(new_stream) => {
+                    log::info!("got remote stream from {url}");
+
+                    let mut need_update = false;
+
+                    if let Some(connection) = connections.borrow_mut().get_mut(&url) {
+                        if let Some(stream) = connection.stream {
+                            stream.set(new_stream);
+                        } else {
+                            need_update = true;
+                            connection.stream = Some(leptos::create_rw_signal(cx, new_stream));
+                        }
+                    }
+
+                    if need_update {
+                        update_remote_videos();
+                    }
+                }
+
+                Err(e) => log::warn!("error getting stream from track for {url}: {e:?}"),
+            }
+        }) as Box<dyn Fn(RtcTrackEvent)>);
+
+        connection.set_ontrack(Some(ontrack.as_ref().unchecked_ref()));
+
+        ontrack.forget();
+
+        let onicecandidate = Closure::wrap(Box::new({
+            let url = url.clone();
+            let me = me.clone();
+
+            move |event: RtcPeerConnectionIceEvent| {
+                if let Some(candidate) = event.candidate() {
+                    let url = url.clone();
+                    let me = me.clone();
+
+                    wasm_bindgen_futures::spawn_local(async move {
+                        send_to_peer(
+                            &me,
+                            &url,
+                            PeerMessage::Candidate {
+                                candidate: &candidate.candidate(),
+                                sdp_mid: candidate.sdp_mid().as_deref(),
+                                sdp_m_line_index: candidate.sdp_m_line_index(),
+                            },
+                        )
+                        .map(|result| {
+                            if let Err(e) = result {
+                                log::warn!("error sending ICE candidate to {url}: {e:?}");
+                            }
+                        })
+                        .await;
+
+                        drop(url);
+                    })
+                }
+            }
+        }) as Box<dyn Fn(RtcPeerConnectionIceEvent)>);
+
+        connection.set_onicecandidate(Some(onicecandidate.as_ref().unchecked_ref()));
+
+        onicecandidate.forget();
+
+        for track in local_stream.get_tracks().iter() {
+            log::info!("adding track for {url}: {track:?}");
+
+            connection.add_track(
+                &track.dyn_into::<MediaStreamTrack>()?,
+                &local_stream,
+                &Array::new(),
+            );
+        }
+
+        Ok::<_, MyError>(connection)
+    }
+}
+
+fn get_sdp(object: &JsValue) -> Result<String, MyError> {
+    Reflect::get(object, &JsValue::from_str("sdp"))?
+        .as_string()
+        .ok_or(MyError::NotAString)
+}
+
+async fn handle_peer_message(
+    me: &OnceCell<Box<str>>,
+    chat_log: WriteSignal<ChatLog>,
+    url: &str,
+    connection: RtcPeerConnection,
+    message: PeerMessage<'_>,
+) -> Result<(), MyError> {
+    match message {
+        PeerMessage::Offer { sdp } => {
+            JsFuture::from(connection.set_remote_description(
+                RtcSessionDescriptionInit::new(RtcSdpType::Offer).sdp(&sdp),
+            ))
+            .await?;
+
+            let sdp = get_sdp(&JsFuture::from(connection.create_answer()).await?)?;
+
+            JsFuture::from(connection.set_local_description(
+                RtcSessionDescriptionInit::new(RtcSdpType::Answer).sdp(&sdp),
+            ))
+            .await?;
+
+            send_to_peer(me, url, PeerMessage::Answer { sdp }).await?;
+        }
+
+        PeerMessage::Answer { sdp } => {
+            JsFuture::from(connection.set_remote_description(
+                RtcSessionDescriptionInit::new(RtcSdpType::Answer).sdp(&sdp),
+            ))
+            .await?;
+        }
+
+        PeerMessage::Candidate {
+            candidate,
+            sdp_mid,
+            sdp_m_line_index,
+        } => {
+            JsFuture::from(
+                connection.add_ice_candidate_with_opt_rtc_ice_candidate_init(Some(
+                    RtcIceCandidateInit::new(candidate)
+                        .sdp_mid(sdp_mid)
+                        .sdp_m_line_index(sdp_m_line_index),
+                )),
+            )
+            .await?;
+        }
+
+        PeerMessage::Chat { message } => {
+            chat_log.update(|log| {
+                log.add(ChatMessage {
+                    source: ChatSource::SomeoneElse,
+                    message,
+                })
+            });
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_message(
+    connections: &RefCell<HashMap<Rc<str>, Connection>>,
+    me: &OnceCell<Box<str>>,
+    chat_log: WriteSignal<ChatLog>,
+    add_connection: &mut dyn (FnMut(&str) -> Result<RtcPeerConnection, MyError>),
+    update_remote_videos: &dyn (Fn()),
+    message: Message,
+) -> Result<(), MyError> {
+    log::debug!("got message {message:?}");
+
+    match message {
+        Message::Text(message) => match serde_json::from_str::<ClientMessage>(&message)? {
+            ClientMessage::You { url } => {
+                me.set(Box::from(url)).map_err(|_| MyError::RedundantYou)?
+            }
+
+            ClientMessage::Add { url } => {
+                if !connections.borrow().contains_key(url) {
+                    async {
+                        let connection = add_connection(url)?;
+
+                        let sdp = get_sdp(&JsFuture::from(connection.create_offer()).await?)?;
+
+                        JsFuture::from(connection.set_local_description(
+                            RtcSessionDescriptionInit::new(RtcSdpType::Offer).sdp(&sdp),
+                        ))
+                        .await?;
+
+                        send_to_peer(me, url, PeerMessage::Offer { sdp }).await
+                    }
+                    .map(|result| {
+                        if let Err(e) = result {
+                            log::warn!("error adding connection {url}: {e:?}");
+                        }
+                    })
+                    .await
+                }
+            }
+
+            ClientMessage::Remove { url } => {
+                connections.borrow_mut().remove(url);
+
+                update_remote_videos();
+            }
+
+            ClientMessage::Peer { url, message } => {
+                let connection = connections
+                    .borrow()
+                    .get(url)
+                    .map(|c| Ok(c.connection.clone()));
+
+                if let Err(e) = handle_peer_message(
+                    me,
+                    chat_log,
+                    url,
+                    connection.unwrap_or_else(|| add_connection(url))?,
+                    message,
+                )
+                .await
+                {
+                    log::warn!("error accepting offer from {url}: {e:?}");
+                }
+            }
+        },
+
+        _ => return Err(MyError::UnexpectedMessage(message)),
+    }
+
+    Ok(())
+}
+
 async fn connect(
     cx: Scope,
     me: Rc<OnceCell<Box<str>>>,
@@ -288,23 +581,6 @@ async fn connect(
         env!("WEBSOCKET_BRIDGE_HOST")
     );
 
-    let ice_server = |spec| {
-        let mut server = RtcIceServer::new();
-        server.urls(&JsValue::from_str(spec));
-        server
-    };
-
-    let mut config = RtcConfiguration::new();
-    config.ice_servers(
-        [
-            ice_server("stun:stun.services.mozilla.com"),
-            ice_server("stun:stun.l.google.com:19302"),
-        ]
-        .into_iter()
-        .collect::<Array>()
-        .deref(),
-    );
-
     let local_stream = JsFuture::from(
         window
             .navigator()
@@ -320,135 +596,6 @@ async fn connect(
 
     local_video.set(Some(local_stream.clone()));
 
-    let update_remote_videos = {
-        let connections = connections.clone();
-
-        move || {
-            let mut vec = connections
-                .borrow()
-                .values()
-                .filter_map(|connection| {
-                    connection
-                        .stream
-                        .as_ref()
-                        .map(|stream| (connection.id, stream.read_only()))
-                })
-                .collect::<Vec<_>>();
-
-            vec.sort_by_key(|(id, _)| *id);
-
-            remote_videos.set(vec);
-        }
-    };
-
-    let mut add = {
-        let connections = connections.clone();
-        let update_remote_videos = update_remote_videos.clone();
-        let me = me.clone();
-        let mut next_id = 0;
-
-        move |url: Rc<str>| {
-            log::info!("adding peer {url}");
-
-            let connection = RtcPeerConnection::new_with_configuration(&config)?;
-
-            connections.borrow_mut().insert(
-                url.clone(),
-                Connection {
-                    id: next_id,
-                    connection: connection.clone(),
-                    stream: None,
-                },
-            );
-
-            next_id += 1;
-
-            update_remote_videos();
-
-            let ontrack = Closure::wrap(Box::new({
-                let url = url.clone();
-                let update_remote_videos = update_remote_videos.clone();
-                let connections = connections.clone();
-
-                move |event: RtcTrackEvent| match event.streams().at(0).dyn_into::<MediaStream>() {
-                    Ok(new_stream) => {
-                        log::info!("got remote stream from {url}");
-
-                        let mut need_update = false;
-
-                        if let Some(connection) = connections.borrow_mut().get_mut(&url) {
-                            if let Some(stream) = connection.stream {
-                                stream.set(new_stream);
-                            } else {
-                                need_update = true;
-                                connection.stream = Some(leptos::create_rw_signal(cx, new_stream));
-                            }
-                        }
-
-                        if need_update {
-                            update_remote_videos();
-                        }
-                    }
-
-                    Err(e) => log::warn!("error getting stream from track for {url}: {e:?}"),
-                }
-            }) as Box<dyn Fn(RtcTrackEvent)>);
-
-            connection.set_ontrack(Some(ontrack.as_ref().unchecked_ref()));
-
-            ontrack.forget();
-
-            let onicecandidate = Closure::wrap(Box::new({
-                let url = url.clone();
-                let me = me.clone();
-
-                move |event: RtcPeerConnectionIceEvent| {
-                    if let Some(candidate) = event.candidate() {
-                        let url = url.clone();
-                        let me = me.clone();
-
-                        wasm_bindgen_futures::spawn_local(async move {
-                            send_to_peer(
-                                &me,
-                                &url,
-                                PeerMessage::Candidate {
-                                    candidate: &candidate.candidate(),
-                                    sdp_mid: candidate.sdp_mid().as_deref(),
-                                    sdp_m_line_index: candidate.sdp_m_line_index(),
-                                },
-                            )
-                            .map(|result| {
-                                if let Err(e) = result {
-                                    log::warn!("error sending ICE candidate to {url}: {e:?}");
-                                }
-                            })
-                            .await;
-
-                            drop(url);
-                        })
-                    }
-                }
-            })
-                as Box<dyn Fn(RtcPeerConnectionIceEvent)>);
-
-            connection.set_onicecandidate(Some(onicecandidate.as_ref().unchecked_ref()));
-
-            onicecandidate.forget();
-
-            for track in local_stream.get_tracks().iter() {
-                log::info!("adding track for {url}: {track:?}");
-
-                connection.add_track(
-                    &track.dyn_into::<MediaStreamTrack>()?,
-                    &local_stream,
-                    &Array::new(),
-                );
-            }
-
-            Ok::<_, MyError>(connection)
-        }
-    };
-
     let (mut tx, mut rx) = WebSocket::open(&url)?.split();
 
     tx.send(Message::Text(serde_json::to_string(
@@ -458,132 +605,26 @@ async fn connect(
     )?))
     .await?;
 
-    let get_sdp = |object: &JsValue| {
-        Reflect::get(object, &JsValue::from_str("sdp"))?
-            .as_string()
-            .ok_or(MyError::NotAString)
-    };
+    let mut add_connection = make_connection_adder(
+        cx,
+        connections.clone(),
+        me.clone(),
+        remote_videos,
+        local_stream,
+    );
+
+    let update_remote_videos = make_remote_video_updater(connections.clone(), remote_videos);
 
     while let Some(message) = rx.next().await {
-        let message = message?;
-
-        log::debug!("got message {message:?}");
-
-        match message {
-            Message::Text(message) => match serde_json::from_str::<ClientMessage>(&message)? {
-                ClientMessage::You { url } => {
-                    me.set(Box::from(url)).map_err(|_| MyError::RedundantYou)?
-                }
-
-                ClientMessage::Add { url } => {
-                    if !connections.borrow().contains_key(url) {
-                        async {
-                            let connection = add(Rc::from(url))?;
-
-                            let sdp = get_sdp(&JsFuture::from(connection.create_offer()).await?)?;
-
-                            JsFuture::from(connection.set_local_description(
-                                RtcSessionDescriptionInit::new(RtcSdpType::Offer).sdp(&sdp),
-                            ))
-                            .await?;
-
-                            send_to_peer(&me, url, PeerMessage::Offer { sdp }).await
-                        }
-                        .map(|result| {
-                            if let Err(e) = result {
-                                log::warn!("error adding connection {url}: {e:?}");
-                            }
-                        })
-                        .await
-                    }
-                }
-
-                ClientMessage::Remove { url } => {
-                    connections.borrow_mut().remove(url);
-
-                    update_remote_videos();
-                }
-
-                ClientMessage::Peer { url, message } => {
-                    let connection = connections
-                        .borrow()
-                        .get(url)
-                        .map(|c| Ok(c.connection.clone()));
-
-                    let connection = connection.unwrap_or_else(|| add(Rc::from(url)))?;
-
-                    match message {
-                        PeerMessage::Offer { sdp } => {
-                            async {
-                                JsFuture::from(connection.set_remote_description(
-                                    RtcSessionDescriptionInit::new(RtcSdpType::Offer).sdp(&sdp),
-                                ))
-                                .await?;
-
-                                let sdp =
-                                    get_sdp(&JsFuture::from(connection.create_answer()).await?)?;
-
-                                JsFuture::from(connection.set_local_description(
-                                    RtcSessionDescriptionInit::new(RtcSdpType::Answer).sdp(&sdp),
-                                ))
-                                .await?;
-
-                                send_to_peer(&me, url, PeerMessage::Answer { sdp }).await
-                            }
-                            .map(|result| {
-                                if let Err(e) = result {
-                                    log::warn!("error accepting offer from {url}: {e:?}");
-                                }
-                            })
-                            .await
-                        }
-
-                        PeerMessage::Answer { sdp } => {
-                            JsFuture::from(connection.set_remote_description(
-                                RtcSessionDescriptionInit::new(RtcSdpType::Answer).sdp(&sdp),
-                            ))
-                            .map(|result| {
-                                if let Err(e) = result {
-                                    log::warn!("error accepting answer from {url}: {e:?}");
-                                }
-                            })
-                            .await
-                        }
-
-                        PeerMessage::Candidate {
-                            candidate,
-                            sdp_mid,
-                            sdp_m_line_index,
-                        } => {
-                            JsFuture::from(
-                                connection.add_ice_candidate_with_opt_rtc_ice_candidate_init(Some(
-                                    RtcIceCandidateInit::new(candidate)
-                                        .sdp_mid(sdp_mid)
-                                        .sdp_m_line_index(sdp_m_line_index),
-                                )),
-                            )
-                            .map(|result| {
-                                if let Err(e) = result {
-                                    log::warn!("error accepting answer from {url}: {e:?}");
-                                }
-                            })
-                            .await
-                        }
-
-                        PeerMessage::Chat { message } => {
-                            chat_log.update(|log| {
-                                log.add(ChatMessage {
-                                    source: ChatSource::SomeoneElse,
-                                    message,
-                                })
-                            });
-                        }
-                    }
-                }
-            },
-
-            _ => return Err(MyError::UnexpectedMessage(message)),
-        }
+        handle_message(
+            &connections,
+            &me,
+            chat_log,
+            &mut add_connection,
+            &update_remote_videos,
+            message?,
+        )
+        .await?;
     }
 
     Ok(())
