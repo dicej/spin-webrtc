@@ -321,6 +321,68 @@ fn make_remote_video_updater(
     }
 }
 
+fn make_track_listener(
+    cx: Scope,
+    connections: Rc<RefCell<HashMap<Rc<str>, Connection>>>,
+    remote_videos: WriteSignal<Vec<(u64, ReadSignal<MediaStream>)>>,
+    url: Rc<str>,
+) -> impl Fn(RtcTrackEvent) {
+    let update_remote_videos = make_remote_video_updater(connections.clone(), remote_videos);
+
+    move |event| match event.streams().at(0).dyn_into::<MediaStream>() {
+        Ok(new_stream) => {
+            log::info!("got remote stream from {url}");
+
+            let mut need_update = false;
+
+            if let Some(connection) = connections.borrow_mut().get_mut(&url) {
+                if let Some(stream) = connection.stream {
+                    stream.set(new_stream);
+                } else {
+                    need_update = true;
+                    connection.stream = Some(leptos::create_rw_signal(cx, new_stream));
+                }
+            }
+
+            if need_update {
+                update_remote_videos();
+            }
+        }
+
+        Err(e) => log::warn!("error getting stream from track for {url}: {e:?}"),
+    }
+}
+
+fn make_ice_listener(
+    me: Rc<OnceCell<Box<str>>>,
+    url: Rc<str>,
+) -> impl Fn(RtcPeerConnectionIceEvent) {
+    move |event| {
+        if let Some(candidate) = event.candidate() {
+            let me = me.clone();
+            let url = url.clone();
+
+            wasm_bindgen_futures::spawn_local(async move {
+                send_to_peer(
+                    &me,
+                    &url,
+                    PeerMessage::Candidate {
+                        candidate: &candidate.candidate(),
+                        sdp_mid: candidate.sdp_mid().as_deref(),
+                        sdp_m_line_index: candidate.sdp_m_line_index(),
+                    },
+                )
+                .map(|result| {
+                    if let Err(e) = result {
+                        log::warn!("error sending ICE candidate to {url}: {e:?}");
+                    }
+                })
+                .await
+            })
+        }
+    }
+}
+
 fn make_connection_adder(
     cx: Scope,
     connections: Rc<RefCell<HashMap<Rc<str>, Connection>>>,
@@ -352,70 +414,19 @@ fn make_connection_adder(
 
         update_remote_videos();
 
-        let ontrack = Closure::wrap(Box::new({
-            let url = url.clone();
-            let update_remote_videos = update_remote_videos.clone();
-            let connections = connections.clone();
-
-            move |event: RtcTrackEvent| match event.streams().at(0).dyn_into::<MediaStream>() {
-                Ok(new_stream) => {
-                    log::info!("got remote stream from {url}");
-
-                    let mut need_update = false;
-
-                    if let Some(connection) = connections.borrow_mut().get_mut(&url) {
-                        if let Some(stream) = connection.stream {
-                            stream.set(new_stream);
-                        } else {
-                            need_update = true;
-                            connection.stream = Some(leptos::create_rw_signal(cx, new_stream));
-                        }
-                    }
-
-                    if need_update {
-                        update_remote_videos();
-                    }
-                }
-
-                Err(e) => log::warn!("error getting stream from track for {url}: {e:?}"),
-            }
-        }) as Box<dyn Fn(RtcTrackEvent)>);
+        let ontrack = Closure::wrap(Box::new(make_track_listener(
+            cx,
+            connections.clone(),
+            remote_videos,
+            url.clone(),
+        )) as Box<dyn Fn(RtcTrackEvent)>);
 
         connection.set_ontrack(Some(ontrack.as_ref().unchecked_ref()));
 
         ontrack.forget();
 
-        let onicecandidate = Closure::wrap(Box::new({
-            let url = url.clone();
-            let me = me.clone();
-
-            move |event: RtcPeerConnectionIceEvent| {
-                if let Some(candidate) = event.candidate() {
-                    let url = url.clone();
-                    let me = me.clone();
-
-                    wasm_bindgen_futures::spawn_local(async move {
-                        send_to_peer(
-                            &me,
-                            &url,
-                            PeerMessage::Candidate {
-                                candidate: &candidate.candidate(),
-                                sdp_mid: candidate.sdp_mid().as_deref(),
-                                sdp_m_line_index: candidate.sdp_m_line_index(),
-                            },
-                        )
-                        .map(|result| {
-                            if let Err(e) = result {
-                                log::warn!("error sending ICE candidate to {url}: {e:?}");
-                            }
-                        })
-                        .await;
-
-                        drop(url);
-                    })
-                }
-            }
-        }) as Box<dyn Fn(RtcPeerConnectionIceEvent)>);
+        let onicecandidate = Closure::wrap(Box::new(make_ice_listener(me.clone(), url.clone()))
+            as Box<dyn Fn(RtcPeerConnectionIceEvent)>);
 
         connection.set_onicecandidate(Some(onicecandidate.as_ref().unchecked_ref()));
 
