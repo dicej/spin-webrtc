@@ -582,16 +582,8 @@ async fn handle_message(
     Ok(())
 }
 
-async fn connect(
-    cx: Scope,
-    me: Rc<OnceCell<Box<str>>>,
-    connections: Rc<RefCell<HashMap<Rc<str>, Connection>>>,
-    local_video: WriteSignal<Option<MediaStream>>,
-    remote_videos: WriteSignal<Vec<(u64, ReadSignal<MediaStream>)>>,
-    chat_log: WriteSignal<ChatLog>,
-) -> Result<(), MyError> {
-    let window = web_sys::window().unwrap();
-    let location = window.location();
+fn websocket_url() -> Result<String, MyError> {
+    let location = web_sys::window().unwrap().location();
 
     let base = format!(
         "https://{}{}",
@@ -602,10 +594,21 @@ async fn connect(
         }
     );
 
-    let url = format!(
+    Ok(format!(
         "wss://{}/connect?f={base}/frame&d={base}/disconnect",
         env!("WEBSOCKET_BRIDGE_HOST")
-    );
+    ))
+}
+
+async fn connect(
+    cx: Scope,
+    me: Rc<OnceCell<Box<str>>>,
+    connections: Rc<RefCell<HashMap<Rc<str>, Connection>>>,
+    local_video: WriteSignal<Option<MediaStream>>,
+    remote_videos: WriteSignal<Vec<(u64, ReadSignal<MediaStream>)>>,
+    chat_log: WriteSignal<ChatLog>,
+) -> Result<(), MyError> {
+    let window = web_sys::window().unwrap();
 
     let local_stream = JsFuture::from(
         window
@@ -622,7 +625,7 @@ async fn connect(
 
     local_video.set(Some(local_stream.clone()));
 
-    let (mut tx, mut rx) = WebSocket::open(&url)?.split();
+    let (mut tx, mut rx) = WebSocket::open(&websocket_url()?)?.split();
 
     tx.send(Message::Text(serde_json::to_string(
         &ServerMessage::Room {
