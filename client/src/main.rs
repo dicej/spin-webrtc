@@ -134,14 +134,16 @@ async fn send_to_peer(
 }
 
 fn videos(cx: Scope) -> Element {
-    let chat_log_element = NodeRef::new(cx);
-
     let (local_video, set_local_video) = leptos::create_signal(cx, None);
+
     let (remote_videos, set_remote_videos) = leptos::create_signal(cx, Vec::new());
+
+    let chat_log_ref = NodeRef::new(cx);
+
     let (chat_log, set_chat_log) = leptos::create_signal(
         cx,
         ChatLog {
-            element: chat_log_element,
+            element: chat_log_ref,
             next_id: 0,
             log: Vec::new(),
         },
@@ -171,38 +173,77 @@ fn videos(cx: Scope) -> Element {
         }
     });
 
-    let remote_video_elements = move |_, (_, video): &(_, ReadSignal<MediaStream>)| {
-        let element = leptos::view! { _, <video playsinline autoplay/> }
-            .dyn_into::<HtmlVideoElement>()
-            .unwrap();
+    let on_key = make_key_listener(connections, me, set_chat_log);
 
-        leptos::create_effect(cx, {
-            let element = element.clone();
-            let video = *video;
+    leptos::view! { cx,
+        <div id="parent">
+            <div id="videos">
+                {local_video_element(cx, local_video)}
+                <For each=move || remote_videos.get() key=|(id, _)| *id>
+                    {remote_video_element}
+                </For>
+            </div>
+            <div id="chat">
+                <div id="chatLog" _ref=chat_log_ref>
+                    <For each=move || chat_log.get().log key=|(id, _)| *id>
+                        {chat_log_element}
+                    </For>
+                </div>
+                <textarea id="chatArea" name="chatArea" on:keyup=on_key/>
+            </div>
+        </div>
+    }
+}
 
-            move |_| {
-                element.set_src_object(Some(&video.get()));
-            }
-        });
-
-        element.into()
-    };
-
-    let local_video_element =
-        leptos::view! { cx, <video id="localVideo" playsinline autoplay muted/> }
-            .dyn_into::<HtmlVideoElement>()
-            .unwrap();
+fn local_video_element(cx: Scope, local_video: ReadSignal<Option<MediaStream>>) -> Element {
+    let element = leptos::view! { cx, <video id="localVideo" playsinline autoplay muted/> }
+        .dyn_into::<HtmlVideoElement>()
+        .unwrap();
 
     leptos::create_effect(cx, {
-        let local_video_element = local_video_element.clone();
+        let element = element.clone();
 
         move |_| {
-            local_video_element.set_src_object(local_video.get().as_ref());
-            local_video_element.set_muted(true);
+            element.set_src_object(local_video.get().as_ref());
+            element.set_muted(true);
         }
     });
 
-    let on_key = move |event: KeyboardEvent| {
+    element.into()
+}
+
+fn remote_video_element(cx: Scope, (_, video): &(u64, ReadSignal<MediaStream>)) -> Element {
+    let element = leptos::view! { _, <video playsinline autoplay/> }
+        .dyn_into::<HtmlVideoElement>()
+        .unwrap();
+
+    leptos::create_effect(cx, {
+        let element = element.clone();
+        let video = *video;
+
+        move |_| {
+            element.set_src_object(Some(&video.get()));
+        }
+    });
+
+    element.into()
+}
+
+fn chat_log_element(cx: Scope, (_, message): &(u64, ChatMessage)) -> Element {
+    let who = match message.source {
+        ChatSource::Me => "me: ",
+        ChatSource::SomeoneElse => "them: ",
+    };
+
+    leptos::view! { cx, <div><b>{who}</b>{message.message.clone()}</div> }
+}
+
+fn make_key_listener(
+    connections: Rc<RefCell<HashMap<Rc<str>, Connection>>>,
+    me: Rc<OnceCell<Box<str>>>,
+    chat_log: WriteSignal<ChatLog>,
+) -> impl Fn(KeyboardEvent) {
+    move |event: KeyboardEvent| {
         if event.key().deref() == "Enter" {
             if let Some(target) = event
                 .target()
@@ -210,6 +251,7 @@ fn videos(cx: Scope) -> Element {
             {
                 let message = target.value();
                 target.set_value("");
+
                 for url in connections.borrow().keys() {
                     wasm_bindgen_futures::spawn_local({
                         let me = me.clone();
@@ -225,7 +267,8 @@ fn videos(cx: Scope) -> Element {
                         }
                     });
                 }
-                set_chat_log.update(|log| {
+
+                chat_log.update(|log| {
                     log.add(ChatMessage {
                         source: ChatSource::Me,
                         message,
@@ -233,34 +276,6 @@ fn videos(cx: Scope) -> Element {
                 });
             }
         }
-    };
-
-    let chat_log_elements = move |cx, (_, message): &(_, ChatMessage)| {
-        let who = match message.source {
-            ChatSource::Me => "me: ",
-            ChatSource::SomeoneElse => "them: ",
-        };
-
-        leptos::view! { cx, <div><b>{who}</b>{message.message.clone()}</div> }
-    };
-
-    leptos::view! { cx,
-        <div id="parent">
-            <div id="videos">
-                {Element::from(local_video_element)}
-                <For each=move || remote_videos.get() key=|(id, _)| *id>
-                    {remote_video_elements}
-                </For>
-            </div>
-            <div id="chat">
-                <div id="chatLog" _ref=chat_log_element>
-                    <For each=move || chat_log.get().log key=|(id, _)| *id>
-                        {chat_log_elements}
-                    </For>
-                </div>
-                <textarea id="chatArea" name="chatArea" on:keyup=on_key/>
-            </div>
-        </div>
     }
 }
 
