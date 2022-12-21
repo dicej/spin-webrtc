@@ -117,13 +117,16 @@ fn handle(req: Request) -> Result<Response> {
 
     Ok(match (req.method(), req.uri().path()) {
         (&Method::POST, "/frame") => {
-            let ServerMessage::Room { name } = serde_json::from_slice(
+            let message = serde_json::from_slice(
                 req.body()
                     .as_deref()
                     .ok_or_else(|| anyhow!("expected non-empty body"))?,
             )?;
 
-            add(send_url()?, name)?;
+            match message {
+                ServerMessage::Room { name } => add(send_url()?, name)?,
+                ServerMessage::Ping => (),
+            }
 
             response().body(None)?
         }

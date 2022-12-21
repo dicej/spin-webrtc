@@ -41,4 +41,5 @@ pub enum ClientMessage<'a> {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage<'a> {
     Room { name: &'a str },
+    Ping,
 }

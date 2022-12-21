@@ -1,7 +1,8 @@
 #![deny(warnings)]
 
 use {
-    futures::{FutureExt, SinkExt, StreamExt},
+    fluvio_wasm_timer::Delay,
+    futures::{stream, FutureExt, SinkExt, StreamExt, TryStreamExt},
     js_sys::{Array, Reflect},
     leptos::{
         self, create_component, leptos_dom,
@@ -19,11 +20,15 @@ use {
         websocket::{futures::WebSocket, Message, WebSocketError},
     },
     spin_webrtc_protocol::{ClientMessage, PeerMessage, ServerMessage},
-    std::{cell::RefCell, collections::HashMap, fmt::Debug, ops::Deref, rc::Rc},
+    std::{
+        cell::RefCell, collections::HashMap, fmt::Debug, io, ops::Deref, rc::Rc, time::Duration,
+    },
     thiserror::Error,
     wasm_bindgen::{closure::Closure, JsCast, JsValue},
     wasm_bindgen_futures::JsFuture,
 };
+
+const PING_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Error, Debug)]
 pub enum MyError {
@@ -35,6 +40,9 @@ pub enum MyError {
 
     #[error("JSON error")]
     Json(#[from] serde_json::Error),
+
+    #[error("I/O error")]
+    Io(#[from] io::Error),
 
     #[error("WebSocket error")]
     WebSocket(WebSocketError),
@@ -112,7 +120,7 @@ struct Connection {
 fn main() {
     console_error_panic_hook::set_once();
 
-    _ = console_log::init_with_level(log::Level::Info);
+    _ = console_log::init_with_level(log::Level::Debug);
 
     leptos::mount_to_body(videos);
 }
@@ -625,7 +633,7 @@ async fn connect(
 
     local_video.set(Some(local_stream.clone()));
 
-    let (mut tx, mut rx) = WebSocket::open(&websocket_url()?)?.split();
+    let (mut tx, rx) = WebSocket::open(&websocket_url()?)?.split();
 
     tx.send(Message::Text(serde_json::to_string(
         &ServerMessage::Room {
@@ -644,16 +652,40 @@ async fn connect(
 
     let update_remote_videos = make_remote_video_updater(connections.clone(), remote_videos);
 
-    while let Some(message) = rx.next().await {
-        handle_message(
-            &connections,
-            &me,
-            chat_log,
-            &mut add_connection,
-            &update_remote_videos,
-            message?,
-        )
-        .await?;
+    let ping_intervals = stream::unfold((), |()| Delay::new(PING_INTERVAL).map(|r| Some((r, ()))));
+
+    enum Item {
+        Message(Message),
+        Ping,
+    }
+
+    let mut rx = stream::select(
+        ping_intervals.map(|r| r.map(|()| Item::Ping).map_err(MyError::from)),
+        rx.map(|r| r.map(Item::Message).map_err(MyError::from)),
+    );
+
+    while let Some(item) = rx.try_next().await? {
+        match item {
+            Item::Message(message) => {
+                handle_message(
+                    &connections,
+                    &me,
+                    chat_log,
+                    &mut add_connection,
+                    &update_remote_videos,
+                    message,
+                )
+                .await?
+            }
+
+            Item::Ping => {
+                // Time to ping the server.  This is to avoid idle connection timeouts which might be imposed by
+                // intermediate proxies.
+
+                tx.send(Message::Text(serde_json::to_string(&ServerMessage::Ping)?))
+                    .await?;
+            }
+        }
     }
 
     Ok(())
