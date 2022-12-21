@@ -20,13 +20,13 @@ exchanging audio and video data.
 - A TLS cert your browser will accept (e.g. one from [letsencrypt.org](https://letsencrypt.org))
     - You may need two of these if you run `websocket-bridge` and `spin` on separate servers
 
-First, start `websocket_bridge`, configuring it to allow traffic to the Spin
+First, start `websocket-bridge`, configuring it to allow traffic to the Spin
 server we'll run in the next step.  Note that the `--allowlist` option takes a
 regular expression (and can be specified multiple times), so be sure to escape
 any dots in the name (e.g. `foo.example.com` -> `foo\.example\.com`).
 
 ```
-RUST_LOG=info websocket_bridge \
+RUST_LOG=info websocket-bridge \
     --address 0.0.0.0:9443 \
     --base-url https://$YOUR_WEBSOCKET_BRIDGE_SERVER:9443 \
     --cert $PATH_TO_YOUR_WEBSOCKET_BRIDGE_TLS_CERT \
