@@ -2,8 +2,66 @@
 <html>
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bulma/0.9.3/css/bulma.min.css"
+        integrity="sha512-IgmDkwzs96t4SrChW29No3NXBIBv8baW490zk5aXvhCD8vuZM3yUSkbyTBcXohkySecyzIrUwiF/qV0cuPcL3Q==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;700&amp;display=swap" rel="stylesheet" />
+
     <link data-trunk rel="scss" href="index.scss" />
     <link data-trunk rel="rust" data-wasm-opt="z" data-weak-refs/>
+    <link rel="stylesheet" href="./dist/index.css" />
   </head>
-  <body></body>
+
+  <body>
+    <div id="parent" class="columns is-multiline">
+      <div id="videos" class="column is-four-fifths-desktop is-full-touch">
+        <!---->
+
+        <div class="tile is-ancestor is-multiline">
+          
+          <!-- videos render here
+            <video id="localVideo" class="tile is-child is-6" playsinline="" autoplay="" muted=""></video>
+          -->
+          
+        </div>
+
+        <div class="card">
+          <div class="card-content">
+            <p class="title">
+              <span class="spin-logo">Spin</span> Web-RTC
+            </p>
+            <p class="subtitle">
+              WebAssembly-powered browser-to-browser WebRTC calls - using <a href="https://developer.fermyon.com/spin/index" target="_blank">Spin</a>, <a href="https://github.com/fermyon/websocket-bridge" target="_blank">websocket-bridge</a> and <a href="https://redis.io/" target="_blank">Redis</a> to establish indirect connections between peers
+            </p>
+          </div>
+          <footer class="card-footer">
+            <p class="card-footer-item">
+              <span>
+                View on <a href="https://github.com/dicej/spin-webrtc" target="_blank">GitHub</a>
+              </span>
+            </p>
+            <p class="card-footer-item">
+              <span>
+                Learn about <a href="https://developer.fermyon.com/spin/index" target="_blank">Spin</a>
+              </span>
+            </p>
+          </footer>
+        </div>
+
+      </div>
+      <div id="chat" class="column is-one-fifth-desktop is-full-touch">
+        <div id="chatLog">
+          <h2>Chat</h2>
+          <!--  chat messages render here
+            <div><b> author: </b> message </div>
+          -->
+          
+        </div>
+        <textarea id="chatArea" name="chatArea"></textarea>
+      </div>
+  </div>
+
+</body>
 </html>
