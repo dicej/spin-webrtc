@@ -184,15 +184,61 @@ fn videos(cx: Scope) -> Element {
     let on_key = make_key_listener(connections, me, set_chat_log);
 
     leptos::view! { cx,
-        <div id="parent">
-            <div id="videos">
-                {local_video_element(cx, local_video)}
-                <For each=move || remote_videos.get() key=|(id, _)| *id>
-                    {remote_video_element}
-                </For>
+        <div id="parent" class="columns is-multiline" class="column is-four-fifths-desktop is-full-touch">
+            <div id="videos" class="column is-four-fifths-desktop is-full-touch">
+                <div class="tile is-ancestor is-multiline">
+                    {local_video_element(cx, local_video)}
+                    <For each=move || remote_videos.get() key=|(id, _)| *id>
+                        {remote_video_element}
+                    </For>
+                </div>
+                <div class="card">
+                    <div class="card-content">
+                        <p class="title">
+                            <span class="spin-logo">
+                                "Spin"
+                            </span>
+                            " WebRTC"
+                        </p>
+                        <p class="subtitle">
+                            "WebAssembly-powered browser-to-browser WebRTC calls - using "
+                            <a href="https://developer.fermyon.com/spin/index" target="_blank">
+                                "Spin"
+                            </a>
+                            ", "
+                            <a href="https://github.com/fermyon/websocket-bridge" target="_blank">
+                                "websocket-bridge"
+                            </a>
+                            " and "
+                            <a href="https://redis.io/" target="_blank">
+                                "Redis"
+                            </a>
+                            " to establish indirect connections between peers"
+                        </p>
+                    </div>
+                    <footer class="card-footer">
+                        <p class="card-footer-item">
+                            <span>
+                                "View on "
+                                <a href="https://github.com/dicej/spin-webrtc" target="_blank">
+                                    "GitHub"
+                                </a>
+                            </span>
+                        </p>
+                        <p class="card-footer-item">
+                            <span>
+                                "Learn about "
+                                <a href="https://developer.fermyon.com/spin/index" target="_blank">
+                                    "Spin"
+                                </a>
+                            </span>
+                        </p>
+                    </footer>
+                </div>
             </div>
-            <div id="chat">
+            <div id="chat" id="chat" class="column is-one-fifth-desktop is-full-touch">
                 <div id="chatLog" _ref=chat_log_ref>
+                    <h2>"Chat"</h2>
                     <For each=move || chat_log.get().log key=|(id, _)| *id>
                         {chat_log_element}
                     </For>
@@ -204,7 +250,7 @@ fn videos(cx: Scope) -> Element {
 }
 
 fn local_video_element(cx: Scope, local_video: ReadSignal<Option<MediaStream>>) -> Element {
-    let element = leptos::view! { cx, <video id="localVideo" playsinline autoplay muted/> }
+    let element = leptos::view! { cx, <video id="localVideo" class="tile is-child is-6" playsinline autoplay muted/> }
         .dyn_into::<HtmlVideoElement>()
         .unwrap();
 
@@ -221,7 +267,7 @@ fn local_video_element(cx: Scope, local_video: ReadSignal<Option<MediaStream>>) 
 }
 
 fn remote_video_element(cx: Scope, (_, video): &(u64, ReadSignal<MediaStream>)) -> Element {
-    let element = leptos::view! { _, <video playsinline autoplay/> }
+    let element = leptos::view! { _, <video class="tile is-child is-6" playsinline autoplay/> }
         .dyn_into::<HtmlVideoElement>()
         .unwrap();
 
