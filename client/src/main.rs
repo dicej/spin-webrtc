@@ -12,7 +12,8 @@ use {
             RtcIceServer, RtcPeerConnection, RtcPeerConnectionIceEvent, RtcSdpType,
             RtcSessionDescriptionInit, RtcTrackEvent,
         },
-        For, ForProps, IntoChild, NodeRef, Prop, ReadSignal, RwSignal, Scope, WriteSignal,
+        For, ForProps, IntoAttribute, IntoChild, NodeRef, Prop, ReadSignal, RwSignal, Scope,
+        WriteSignal,
     },
     once_cell::unsync::OnceCell,
     reqwasm::{
@@ -284,12 +285,12 @@ fn remote_video_element(cx: Scope, (_, video): &(u64, ReadSignal<MediaStream>)) 
 }
 
 fn chat_log_element(cx: Scope, (_, message): &(u64, ChatMessage)) -> Element {
-    let who = match message.source {
-        ChatSource::Me => "me: ",
-        ChatSource::SomeoneElse => "them: ",
+    let (who, class) = match message.source {
+        ChatSource::Me => ("me: ", "sent"),
+        ChatSource::SomeoneElse => ("them: ", "received"),
     };
 
-    leptos::view! { cx, <div><b>{who}</b>{message.message.clone()}</div> }
+    leptos::view! { cx, <div class=class><b>{who}</b>{message.message.clone()}</div> }
 }
 
 fn make_key_listener(
@@ -306,28 +307,30 @@ fn make_key_listener(
                 let message = target.value();
                 target.set_value("");
 
-                for url in connections.borrow().keys() {
-                    wasm_bindgen_futures::spawn_local({
-                        let me = me.clone();
-                        let url = url.clone();
-                        let message = message.clone();
+                if !message.trim().is_empty() {
+                    for url in connections.borrow().keys() {
+                        wasm_bindgen_futures::spawn_local({
+                            let me = me.clone();
+                            let url = url.clone();
+                            let message = message.clone();
 
-                        async move {
-                            if let Err(e) =
-                                send_to_peer(&me, &url, PeerMessage::Chat { message }).await
-                            {
-                                log::warn!("error sending chat to {url}: {e:?}");
+                            async move {
+                                if let Err(e) =
+                                    send_to_peer(&me, &url, PeerMessage::Chat { message }).await
+                                {
+                                    log::warn!("error sending chat to {url}: {e:?}");
+                                }
                             }
-                        }
+                        });
+                    }
+
+                    chat_log.update(|log| {
+                        log.add(ChatMessage {
+                            source: ChatSource::Me,
+                            message,
+                        })
                     });
                 }
-
-                chat_log.update(|log| {
-                    log.add(ChatMessage {
-                        source: ChatSource::Me,
-                        message,
-                    })
-                });
             }
         }
     }
