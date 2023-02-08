@@ -15,6 +15,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e1b586273c5702936fe7b7d6896644d8be71e6314cfe09d3167c95f712589e8"
 
 [[package]]
+name = "base64"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4a4ddaa51a5bc52a6948f74c06d20aaaddb71924eab79b8c97a8c556e942d6a"
+
+[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -205,8 +211,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c05aeb6a22b8f62540c194aac980f2115af067bfe15a0734d7277a768d396b31"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "wasi",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -393,7 +401,7 @@ version = "0.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0feaa0b0a489fbafde309acc5630c7d5477647f605bb97a76772d7f7ec5d7a89"
 dependencies = [
- "base64",
+ "base64 0.13.1",
  "cfg-if",
  "futures",
  "js-sys",
@@ -753,10 +761,12 @@ checksum = "a507befe795404456341dfab10cef66ead4c041f62b8b11bbb92bffe5d0953e0"
 name = "spin-webrtc-client"
 version = "0.1.0"
 dependencies = [
+ "base64 0.21.0",
  "console_error_panic_hook",
  "console_log",
  "fluvio-wasm-timer",
  "futures",
+ "getrandom",
  "gloo-utils",
  "js-sys",
  "leptos",

@@ -1,6 +1,7 @@
 #![deny(warnings)]
 
 use {
+    base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine},
     fluvio_wasm_timer::Delay,
     futures::{stream, FutureExt, SinkExt, StreamExt, TryStreamExt},
     js_sys::{Array, Reflect},
@@ -122,6 +123,18 @@ fn main() {
     console_error_panic_hook::set_once();
 
     _ = console_log::init_with_level(log::Level::Debug);
+
+    let location = web_sys::window().unwrap().location();
+
+    // If a room has not yet been specified, generate a random ID and use that as the room name.
+    if !location.pathname().unwrap().starts_with("/room") {
+        let mut bytes = [0u8; 16];
+        getrandom::getrandom(&mut bytes).unwrap();
+
+        let room = URL_SAFE_NO_PAD.encode(bytes);
+
+        location.set_pathname(&format!("/room/{room}")).unwrap()
+    }
 
     leptos::mount_to_body(videos);
 }
@@ -686,7 +699,7 @@ async fn connect(
 
     tx.send(Message::Text(serde_json::to_string(
         &ServerMessage::Room {
-            name: &window.location().pathname()?,
+            name: &window.location().href()?,
         },
     )?))
     .await?;
